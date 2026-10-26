@@ -1,0 +1,60 @@
+# Sandbox efímero para agentes Véritas. SOLO se dispara por API
+# (workflow_dispatch con el token del usuario). Sin checkout, sin actions
+# de terceros, sin secrets: el runner solo decodifica, ejecuta con límites
+# y vuelca el resultado en el log entre marcadores. VM desechable por run.
+name: sandbox-run
+on:
+  workflow_dispatch:
+    inputs:
+      language:
+        description: 'Lenguaje: python | node | shell'
+        required: true
+        type: choice
+        options: ['python', 'node', 'shell']
+      code_b64:
+        description: 'Código fuente en base64 (máx ~48 KB)'
+        required: true
+        type: string
+run-name: sandbox-${{ inputs.language }}-${{ github.run_id }}
+permissions: {}
+concurrency:
+  group: sandbox-runners
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Decodificar entrada
+        run: |
+          set -e
+          echo '${{ inputs.code_b64 }}' | base64 -d > /tmp/code.bin
+          BYTES=$(wc -c < /tmp/code.bin)
+          if [ "$BYTES" -gt 49152 ]; then echo "codigo_muy_grande:$BYTES" >&2; exit 2; fi
+          echo "bytes=$BYTES"
+      - name: Ejecutar con límites
+        id: exec
+        run: |
+          cp /tmp/code.bin /tmp/prog
+          case '${{ inputs.language }}' in
+            python) CMD="python3 /tmp/prog" ;;
+            node)   CMD="node /tmp/prog" ;;
+            shell)  CMD="bash /tmp/prog" ;;
+          esac
+          INICIO=$(date +%s%3N)
+          set +e
+          timeout 300 env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp $CMD > /tmp/out.txt 2> /tmp/err.txt
+          SALIDA=$?
+          set -e
+          FIN=$(date +%s%3N)
+          head -c 60000 /tmp/out.txt | base64 -w0 > /tmp/out.b64
+          head -c 20000 /tmp/err.txt | base64 -w0 > /tmp/err.b64
+          python3 -c "import json;print(json.dumps({'exit_code':$SALIDA,'ms':$FIN-$INICIO,'stdout_b64':open('/tmp/out.b64').read().strip(),'stderr_b64':open('/tmp/err.b64').read().strip()}))" > /tmp/result.json
+          echo "exit=$SALIDA"
+      - name: Publicar resultado en el log
+        if: always()
+        run: |
+          echo '::VERITAS_RESULT_BEGIN::'
+          base64 -w0 /tmp/result.json 2>/dev/null || echo -n 'e30='
+          echo
+          echo '::VERITAS_RESULT_END::'
