@@ -15,6 +15,10 @@ on:
         description: 'Código fuente en base64 (máx ~48 KB)'
         required: true
         type: string
+      nonce:
+        description: 'Hex aleatorio para correlacionar el run (lo genera el cliente)'
+        required: false
+        type: string
 run-name: sandbox-${{ inputs.language }}-${{ github.run_id }}
 permissions: {}
 concurrency:
@@ -54,6 +58,7 @@ jobs:
       - name: Publicar resultado en el log
         if: always()
         run: |
+          echo '::VERITAS_NONCE::${{ inputs.nonce }}::'
           echo '::VERITAS_RESULT_BEGIN::'
           base64 -w0 /tmp/result.json 2>/dev/null || echo -n 'e30='
           echo
